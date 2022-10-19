@@ -1,0 +1,94 @@
+CREATE OR REPLACE TABLE `foodora-bi-se.bl_bi.ops_as_vendor_follow_up_ccr` AS
+
+WITH dates AS (
+SELECT DISTINCT 
+  d.report_week
+, d.iso_date
+FROM `foodora-bi-se.bl_bi.dim_date` AS d
+where d.iso_date BETWEEN DATE_SUB(CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1), INTERVAL 4 WEEK)+1
+AND  CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1)
+),
+ccr_data AS (
+SELECT 
+  d.report_week AS dashboard_week
+, CONCAT(v.vendor_name, " - (", v.vendor_code, ")") AS vendor_name_code
+, STRING_AGG(DISTINCT v.delivery_type) AS agg_delivery_type
+, a.sf_account_manager
+, a.am_region
+, a.has_auto_accept
+
+
+, SUM(CASE WHEN declinereason_code = "VENDOR_CLOSED" THEN 1 ELSE 0 END) AS VENDOR_CLOSED
+, SUM(CASE WHEN declinereason_code = "VENDOR_DEAL_PROBLEMS" THEN 1 ELSE 0 END) AS VENDOR_DEAL_PROBLEMS
+, SUM(CASE WHEN declinereason_code = "VENDOR_DELIVERY_RIDER_UNAVAILABLE" THEN 1 ELSE 0 END) AS VENDOR_DELIVERY_RIDER_UNAVAILABLE
+, SUM(CASE WHEN declinereason_code = "VENDOR_INCOMPLETE_ADDRESS" THEN 1 ELSE 0 END) AS VENDOR_INCOMPLETE_ADDRESS
+, SUM(CASE WHEN declinereason_code = "VENDOR_NO_DELIVERY_TO_THAT_ADDRESS" THEN 1 ELSE 0 END) AS VENDOR_NO_DELIVERY_TO_THAT_ADDRESS
+, SUM(CASE WHEN declinereason_code = "VENDOR_NOT_RESPONDING" THEN 1 ELSE 0 END) AS VENDOR_NOT_RESPONDING
+, SUM(CASE WHEN declinereason_code = "VENDOR_OTHER" THEN 1 ELSE 0 END) AS VENDOR_OTHER
+, SUM(CASE WHEN declinereason_code = "VENDOR_PRODUCT_UNAVAILABLE" THEN 1 ELSE 0 END) AS VENDOR_PRODUCT_UNAVAILABLE
+, SUM(CASE WHEN declinereason_code = "VENDOR_RIDER_ACCIDENT" THEN 1 ELSE 0 END) AS VENDOR_RIDER_ACCIDENT
+, SUM(CASE WHEN declinereason_code = "VENDOR_TECHNICAL_PROBLEM" THEN 1 ELSE 0 END) AS VENDOR_TECHNICAL_PROBLEM
+, SUM(CASE WHEN declinereason_code = "VENDOR_TOO_BUSY" THEN 1 ELSE 0 END) AS VENDOR_TOO_BUSY
+, SUM(CASE WHEN declinereason_code = "VENDOR_UNREACHABLE" THEN 1 ELSE 0 END) AS VENDOR_UNREACHABLE
+, SUM(CASE WHEN declinereason_code = "VENDOR_WEATHER_PROBLEMS" THEN 1 ELSE 0 END) AS VENDOR_WEATHER_PROBLEMS
+, SUM(CASE WHEN declinereason_code = "VENDOR_WRONG_MENU" THEN 1 ELSE 0 END) AS VENDOR_WRONG_MENU
+
+
+, SUM(valid_orders) AS valid_orders 
+, SUM(gross_orders) AS gross_orders 
+, SUM(failed_orders) AS failed_orders 
+, SUM(cancelled_orders) AS cancelled_orders 
+
+FROM `foodora-bi-se.uploaded_data.vendor_follow_up_AS` a
+LEFT JOIN `foodora-bi-se.bl_bi.report_vendor_30d` v
+       ON v.vendor_code = a.vendor_code
+      AND v.vendor_name = a.vendor_name
+LEFT JOIN `foodora-bi-se.bl_bi.dim_date` d 
+       ON v.order_date = d.iso_date 
+
+WHERE v.global_entity_id = "OP_SE"
+  AND v.country = "Sweden"
+  AND v.order_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
+
+
+GROUP BY 1,2,4,5,6, v.vendor_code, v.global_entity_id, v.vendor_name
+)
+
+SELECT  
+  dashboard_week
+, vendor_name_code	
+, agg_delivery_type	
+, sf_account_manager	
+, am_region
+, has_auto_accept
+
+, valid_orders 
+, gross_orders 
+, failed_orders 
+, cancelled_orders 
+
+, SUM(VENDOR_CLOSED) AS VENDOR_CLOSED
+, SUM(VENDOR_DEAL_PROBLEMS) AS VENDOR_DEAL_PROBLEMS
+, SUM(VENDOR_DELIVERY_RIDER_UNAVAILABLE) AS VENDOR_DELIVERY_RIDER_UNAVAILABLE
+, SUM(VENDOR_INCOMPLETE_ADDRESS) AS VENDOR_INCOMPLETE_ADDRESS
+, SUM(VENDOR_NO_DELIVERY_TO_THAT_ADDRESS) AS VENDOR_NO_DELIVERY_TO_THAT_ADDRESS
+, SUM(VENDOR_NOT_RESPONDING) AS VENDOR_NOT_RESPONDING
+, SUM(VENDOR_OTHER) AS VENDOR_OTHER
+, SUM(VENDOR_PRODUCT_UNAVAILABLE) AS VENDOR_PRODUCT_UNAVAILABLE
+, SUM(VENDOR_RIDER_ACCIDENT) AS VENDOR_RIDER_ACCIDENT
+, SUM(VENDOR_TECHNICAL_PROBLEM) AS VENDOR_TECHNICAL_PROBLEM
+, SUM(VENDOR_TOO_BUSY) AS VENDOR_TOO_BUSY
+, SUM(VENDOR_UNREACHABLE) AS VENDOR_UNREACHABLE
+, SUM(VENDOR_WEATHER_PROBLEMS) AS VENDOR_WEATHER_PROBLEMS
+, SUM(VENDOR_WRONG_MENU) AS VENDOR_WRONG_MENU
+
+
+, SUM(valid_orders) OVER (PARTITION BY vendor_name_code) AS total_valid_orders_timeframe
+, SUM(gross_orders) OVER (PARTITION BY vendor_name_code) AS total_gross_orders_timeframe
+, SUM(failed_orders) OVER (PARTITION BY vendor_name_code) AS total_failed_orders_timeframe
+, SUM(cancelled_orders) OVER (PARTITION BY vendor_name_code) AS total_cancelled_orders_timeframe
+
+FROM ccr_data
+GROUP BY 1,2,3,4,5,6, valid_orders, gross_orders, failed_orders, cancelled_orders
+
+
