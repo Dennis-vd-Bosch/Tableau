@@ -1,0 +1,172 @@
+-- main query for vendor follow up list (top 100) in Tableau 
+
+CREATE OR REPLACE TABLE `foodora-bi-se.bl_bi.ops_as_vendor_follow_up_base` AS
+
+
+WITH dates AS (
+  SELECT DISTINCT 
+  d.report_week
+  FROM `foodora-bi-se.bl_bi.dim_date` AS d
+  WHERE d.iso_date BETWEEN DATE_SUB(CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1), INTERVAL 4 WEEK)+1
+  AND CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1)
+),
+
+vendor_performance AS (
+SELECT 
+    a.vendor_code
+  , a.vendor_name
+  , CONCAT(vendor_name, " - (", vendor_code, ")") AS vendor_name_code
+  , CASE WHEN LOWER(a.vendor_name) LIKE "%inactive%" 
+           OR LOWER(a.vendor_name) LIKE"%ianctive%"
+           OR LOWER(a.vendor_name) LIKE"%inacitve%"
+           OR LOWER(a.vendor_name) LIKE"%inacive%"
+           OR LOWER(a.vendor_name) LIKE"%inactivate%"
+           OR LOWER(a.vendor_name) LIKE"%inactve%"
+           OR LOWER(a.vendor_name) LIKE"%inactvel%"
+           OR LOWER(a.vendor_name) LIKE"%inative%"
+           OR LOWER(a.vendor_name) LIKE"%nactive%"
+    THEN TRUE ELSE FALSE END AS inactive_vendor
+  , a.chain_name
+  , CASE WHEN a.chain_name = b.chain_name THEN "AAA" ELSE "Non-AAA" END AS Chain_type
+
+  , CASE WHEN LOWER(a.vendor_name) LIKE "%foodora market%" THEN TRUE ELSE FALSE END AS is_dmart
+
+  , a.vendor_city 
+  , a.report_week
+  , a.gross_orders
+  , a.cancelled_orders
+  , a.valid_orders
+  , CASE WHEN a.cancelled_orders IS NULL 
+           OR a.cancelled_orders = 0 
+           OR a.gross_orders = 0 
+           OR a.cancelled_orders = 0 AND a.gross_orders = 0 THEN NULL
+    ELSE SUM(a.cancelled_orders) OVER (PARTITION BY report_week, vendor_code, vendor_name) / SUM(a.gross_orders) OVER (PARTITION BY report_week, vendor_code, vendor_name)
+    END AS fail_rate
+
+
+  , a.delivery_time_cnt
+  , a.delivery_time_mins
+  , CASE WHEN a.delivery_time_mins = 0 AND a.delivery_time_cnt = 0 THEN NULL 
+         ELSE a.delivery_time_mins / a.delivery_time_cnt 
+         END AS avg_delivery_mins 
+
+  , a.promised_delivery_time_cnt
+  , a.promised_delivery_time_mins
+  , CASE WHEN a.promised_delivery_time_mins = 0 AND a.promised_delivery_time_cnt = 0 THEN NULL 
+         ELSE a.promised_delivery_time_mins / a.promised_delivery_time_cnt 
+         END AS avg_promised_delivery_mins 
+
+  , a.bag_time_mins
+  , a.bag_time_count
+  , CASE WHEN a.bag_time_mins = 0 AND a.bag_time_count = 0 THEN NULL 
+         ELSE a.bag_time_mins / a.bag_time_count 
+         END AS avg_bag_time_mins 
+
+  , a.bag_time_count_l10
+  , CASE WHEN a.bag_time_count_l10 = 0 AND a.bag_time_count = 0 OR a.bag_time_count_l10 = 0 THEN 0 
+         ELSE a.bag_time_count_l10 / a.bag_time_count 
+         END AS pcnt_bag_time_l10 
+
+  , a.vendor_late_count5
+  , CASE WHEN a.vendor_late_count5 = 0 AND a.gross_orders = 0 OR a.vendor_late_count5 = 0 THEN 0 
+         ELSE a.vendor_late_count5 / a.gross_orders 
+         END AS pcnt_vendor_l_5
+
+  , a.vendor_late_count10
+  , CASE WHEN a.vendor_late_count10 = 0 AND a.gross_orders = 0 OR a.vendor_late_count10 = 0 THEN 0 
+         ELSE a.vendor_late_count10 / a.gross_orders 
+         END AS pcnt_vendor_l_10
+
+  , a.vendor_late_count15
+  , CASE WHEN a.vendor_late_count15 = 0 AND a.gross_orders = 0 OR a.vendor_late_count15 = 0 THEN 0 
+         ELSE a.vendor_late_count15 / a.gross_orders 
+         END AS pcnt_vendor_l_15
+
+  , a.rider_late_count5
+  , CASE WHEN a.rider_late_count5 = 0 AND a.gross_orders = 0 OR a.rider_late_count5 = 0 THEN 0 
+         ELSE a.rider_late_count5 / a.gross_orders 
+         END AS pcnt_rider_l_5
+
+  , a.rider_late_count10
+  , CASE WHEN a.rider_late_count10 = 0 AND a.gross_orders = 0 OR a.rider_late_count10 = 0 THEN 0 
+         ELSE a.rider_late_count10 / a.gross_orders 
+         END AS pcnt_rider_l_10
+
+  , a.rider_late_count15
+  , CASE WHEN a.rider_late_count15 = 0 AND a.gross_orders = 0 OR a.rider_late_count15 = 0 THEN 0 
+         ELSE a.rider_late_count15 / a.gross_orders 
+         END AS pcnt_rider_l_15
+
+  , a.est_prep_time_mins
+  , a.est_prep_time_count
+  , CASE WHEN a.est_prep_time_mins = 0 AND a.est_prep_time_count = 0 OR a.est_prep_time_mins = 0 OR a.est_prep_time_count = 0 THEN NULL 
+         ELSE a.est_prep_time_mins / a.est_prep_time_count 
+         END AS avg_est_prep_time_mins 
+
+  , a.prep_time_mins
+  , a.prep_time_count
+  , CASE WHEN a.prep_time_mins = 0 AND a.prep_time_count = 0 OR a.prep_time_mins = 0 OR a.prep_time_count = 0 THEN NULL 
+         ELSE a.prep_time_mins / a.prep_time_count 
+         END AS avg_prep_time_mins 
+
+  , a.complaints_orders AS order_complains
+  , CASE WHEN a.complaints_orders = 0 AND a.gross_orders = 0 OR a.complaints_orders = 0 OR a.gross_orders = 0 THEN 0 
+         ELSE a.complaints_orders / a.gross_orders 
+         END AS pcnt_order_complains
+
+  , a.complaints_total_vendor AS vendor_complains
+  , CASE WHEN a.complaints_total_vendor = 0 AND a.gross_orders = 0 OR a.complaints_total_vendor = 0 OR a.gross_orders = 0 THEN 0 
+         ELSE a.complaints_total_vendor / a.gross_orders 
+         END AS pcnt_vendor_complains
+
+  , a.closed_hours
+  , CASE WHEN a.closed_hours IS NULL AND a.hours_open IS NULL OR a.closed_hours IS NULL THEN 0
+         ELSE a.closed_hours / (a.closed_hours + a.hours_open)
+         END AS pcnt_closed
+
+  , a.hours_open
+  , CASE WHEN a.hours_open IS NULL AND a.closed_hours IS NULL OR a.hours_open IS NULL THEN 0
+         ELSE a.hours_open / (a.closed_hours + a.hours_open)
+         END AS pcnt_open
+
+
+
+-- used as filter when vendor >= x orders in last 4 weeks
+, SUM(valid_orders) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name) AS total_valid_orders_timeframe
+, SUM(cancelled_orders) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name) AS total_cancelled_orders_timeframe
+
+, SUM(cancelled_orders) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name)  / NULLIF( SUM(gross_orders) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name),0) AS average_failrate_timeframe
+, SUM(closed_hours) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name)  / NULLIF( SUM(hours_open) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name),0) AS average_closed_timeframe
+, SUM(hours_open) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name)  / NULLIF( SUM(closed_hours) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name),0) AS average_open_timeframe
+
+, SUM(vendor_late_count5) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name) AS total_vendor_late5_timeframe
+, SUM(vendor_late_count10) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name) AS total_vendor_late10_timeframe
+, SUM(vendor_late_count15) OVER (PARTITION BY vendor_code, global_entity_id, vendor_name) AS total_vendor_late15_timeframe
+
+FROM `foodora-bi-se.bl_bi.business_tool_weekly_vendor_report` AS a
+      LEFT JOIN `foodora-bi-se.uploaded_data.se_aaa_chains`  AS b 
+      ON a.chain_name = b.chain_name
+WHERE a.global_entity_id = "OP_SE"
+  AND a.report_week >= CAST((SELECT MIN(report_week) FROM dates) AS STRING)
+ORDER BY report_week DESC
+)
+
+
+SELECT 
+*, 
+CASE 
+    -- filter 1: vendors with most declined orders
+    WHEN total_cancelled_orders_timeframe >= 7 AND average_failrate_timeframe >= 0.12 THEN "Filter 1: most cancelled"
+      -- filter 2: vendors with most late prep 15m orders
+      WHEN total_cancelled_orders_timeframe >= 9 AND total_vendor_late15_timeframe >= 0.15 THEN "Filter 2: most late"
+        -- filter 3: vendors most offline 
+        WHEN total_cancelled_orders_timeframe >= 6 AND average_closed_timeframe >= 0.11 THEN "Filter 3: most offline"
+          END AS Dashboard_filter
+
+FROM vendor_performance
+WHERE inactive_vendor IS FALSE
+-- AND average_failrate_timeframe >= 0.1
+-- AND total_cancelled_orders_timeframe>= 1
+
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58
+
