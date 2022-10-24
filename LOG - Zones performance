@@ -73,6 +73,11 @@ SELECT DISTINCT
   cancellations.*
 , zones.* EXCEPT(order_code)
 , order_info.* EXCEPT(order_code)
+
+, CASE WHEN time_cancelled_rounded_quarter_local IS NULL THEN time_created_rounded_quarter_local ELSE time_cancelled_rounded_quarter_local END AS quarter_time
+, CASE WHEN time_cancelled_rounded_half_hour_local IS NULL THEN time_created_rounded_half_hour_local ELSE time_cancelled_rounded_half_hour_local END AS half_time
+, CASE WHEN time_cancelled_rounded_hour_local IS NULL THEN time_created_rounded_hour_local ELSE time_cancelled_rounded_hour_local END AS hour_time
+
 , SUM(cancelled_count) OVER (PARTITION BY city, zone) AS total_cancelled_orders_zone_city -- filter to sort the zones in order
 , SUM(cancelled_count) OVER (PARTITION BY city) AS total_cancelled_orders_city -- filter to sort the cities 
 FROM cancellations 
