@@ -6,7 +6,44 @@ FROM `foodora-bi-se.bl_bi.dim_date` AS d
 where d.iso_date BETWEEN DATE_SUB(CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1), INTERVAL 12 WEEK)+1
 AND  CURRENT_DATE-1
 ),
-order_base AS ( 
+
+cancellations AS (
+SELECT
+   -- Local timezone and rounded to 15, 30 or 60 min
+        timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 15 as int64) * 15  minute) 
+        AS time_created_rounded_quarter_local,
+        timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 30 as int64) * 30  minute) 
+        AS time_created_rounded_half_hour_local,
+        timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 60 as int64) * 60  minute) 
+        AS time_created_rounded_hour_local,
+        -- Local timezone and rounded to 15, 30 or 60 min
+        timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 15 as int64)* 15  minute) 
+        AS time_cancelled_rounded_quarter_local,
+        timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 30 as int64)* 30  minute) 
+        AS time_cancelled_rounded_half_hour_local,
+        timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 60 as int64)* 60  minute) 
+        AS time_cancelled_rounded_hour_local
+, EXTRACT(HOUR FROM(vendor.cancelled_at - created_at)) AS hours_to_cancel
+, EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)) AS mins_to_cancel
+, EXTRACT(SECOND FROM(vendor.cancelled_at - created_at)) AS secs_to_cancel
+, NULLIF(EXTRACT(HOUR FROM(vendor.cancelled_at - created_at))/60,0) + NULLIF(EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)),0) + NULLIF(EXTRACT(SECOND FROM(vendor.cancelled_at - created_at))/60,0) AS total_canc_time_min
+, vendor.cancellation.reason AS cancellation_reason
+, vendor.cancellation.owner as vendor_owner
+, vendor.cancellation.stage AS stage
+, delivery_type
+, CASE WHEN delivery_type = "OWN_DELIVERY" THEN "OD" WHEN delivery_type = "VENDOR_DELIVERY" THEN "VD" ELSE delivery_type END AS delivery
+, is_preorder
+, rider.timings.zone_stats.mean_delay AS mean_delay
+, vendor.order_status AS order_status
+, CASE WHEN vendor.order_status = "completed" THEN 1 ELSE 0 END AS completed_count
+, CASE WHEN vendor.order_status = "cancelled" THEN 1 ELSE 0 END AS cancelled_count
+, order_code
+FROM `fulfillment-dwh-production.curated_data_shared.orders_v2`
+WHERE entity_id = "OP_SE"
+  AND created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
+),
+
+zones AS ( 
 SELECT 
    FORMAT_DATE('%a', order_date) AS day_name
 , EXTRACT(WEEK FROM order_date) AS week_number
@@ -21,26 +58,7 @@ FROM `foodora-bi-se.bl_bi.order_rank`
 WHERE created_date_utc BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
   AND global_entity_id = "OP_SE"
 ),
-cancellation_info AS (
-SELECT
-  EXTRACT(HOUR FROM(vendor.cancelled_at - created_at)) AS hours_to_cancel
-, EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)) AS mins_to_cancel
-, EXTRACT(SECOND FROM(vendor.cancelled_at - created_at)) AS secs_to_cancel
-, NULLIF(EXTRACT(HOUR FROM(vendor.cancelled_at - created_at))/60,0) + NULLIF(EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)),0) + NULLIF(EXTRACT(SECOND FROM(vendor.cancelled_at - created_at))/60,0) AS total_canc_time_min
-, vendor.cancellation.reason AS cancellation_reason
-, vendor.cancellation.owner as vendor_owner
-, vendor.cancellation.stage AS stage
-, delivery_type
-, is_preorder
-, rider.timings.zone_stats.mean_delay AS mean_delay
-, vendor.order_status AS order_status
-, CASE WHEN vendor.order_status = "completed" THEN 1 ELSE 0 END AS completed_count
-, CASE WHEN vendor.order_status = "cancelled" THEN 1 ELSE 0 END AS cancelled_count
-, order_code
-FROM `fulfillment-dwh-production.curated_data_shared.orders_v2`
-WHERE entity_id = "OP_SE"
-  AND created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
-),
+
 order_info AS (
 SELECT 
   vendor_name
@@ -51,16 +69,16 @@ WHERE entity_id = "OP_SE"
   AND created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
 )
 
-SELECT 
-  order_base.*
-, cancellation_info.* EXCEPT(order_code)
+SELECT DISTINCT 
+  cancellations.*
+, zones.* EXCEPT(order_code)
 , order_info.* EXCEPT(order_code)
 , SUM(cancelled_count) OVER (PARTITION BY city, zone) AS total_cancelled_orders_zone_city -- filter to sort the zones in order
 , SUM(cancelled_count) OVER (PARTITION BY city) AS total_cancelled_orders_city -- filter to sort the cities 
-FROM order_base 
-LEFT JOIN cancellation_info
-       ON order_base.order_code = cancellation_info.order_code
+FROM cancellations 
+LEFT JOIN zones
+       ON cancellations.order_code = zones.order_code
 LEFT JOIN order_info
-       ON order_base.order_code = order_info.order_code
+       ON cancellations.order_code = order_info.order_code
 
-WHERE delivery_type != "Null"
+WHERE delivery_type != "Null" AND city != "Null"
