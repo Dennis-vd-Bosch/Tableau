@@ -67,8 +67,9 @@ SELECT
 FROM `foodora-bi-se.bl_performance.delivery_data`
 WHERE entity_id = "OP_SE"
   AND created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
-)
+),
 
+prep AS (
 SELECT DISTINCT 
   cancellations.*
 , zones.* EXCEPT(order_code)
@@ -87,3 +88,47 @@ LEFT JOIN order_info
        ON cancellations.order_code = order_info.order_code
 
 WHERE delivery_type != "Null" AND city != "Null"
+)
+
+SELECT
+  time_created_rounded_quarter_local	
+, time_created_rounded_half_hour_local	
+, time_created_rounded_hour_local	
+, time_cancelled_rounded_quarter_local	
+, time_cancelled_rounded_half_hour_local	
+, time_cancelled_rounded_hour_local	
+, hours_to_cancel	
+, mins_to_cancel	
+, secs_to_cancel	
+, total_canc_time_min	
+, cancellation_reason	
+, vendor_owner	
+, stage	
+, delivery_type	
+, delivery	
+, is_preorder
+, order_status	
+, day_name	
+, week_number	
+, year_month_name	
+, created_date_utc	
+, city	
+, zone	
+, is_valid_order	
+, vendor_name	
+, chain_name	
+, quarter_time	
+, half_time	
+, hour_time	
+
+, AVG(mean_delay) AS mean_delay
+, SUM(completed_count) AS sum_completed_count	
+, SUM(cancelled_count) AS sum_cancelled_count
+, COUNT(order_code) AS total_order_codes	
+, MAX(total_cancelled_orders_city) AS city_rank
+, MAX(total_cancelled_orders_zone_city) AS zone_city_rank
+
+
+FROM prep 
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29
+
