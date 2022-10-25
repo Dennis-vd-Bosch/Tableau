@@ -3,8 +3,8 @@ WITH date_param AS (
     start_date_input
   , end_date_input
   FROM (
-    SELECT CAST('2022-10-23' AS DATE) AS start_date_input
-  , CAST("2022-10-24" AS DATE) AS end_date_input) 
+    SELECT CAST('2022-09-23' AS DATE) AS start_date_input
+  , CAST("2022-10-23" AS DATE) AS end_date_input) 
 ),
 order_base AS (
 SELECT
@@ -82,13 +82,14 @@ FROM order_profitability
 
 
 SELECT 
-  profit_group	
+  vendor_name
+, profit_group	
 , delivery_type
 , delivery_group
 , COUNT(DISTINCT order_code) AS number_of_orders
 , SUM(net_profit_order) AS profit_loss
 FROM prep
-GROUP BY 1,2,3
+GROUP BY 1,2,3,4
 ORDER BY 1,2,3,4 DESC
 
 
