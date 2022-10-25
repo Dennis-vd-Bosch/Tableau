@@ -93,6 +93,25 @@ GROUP BY 1,2,3,4
 ORDER BY 1,2,3,4 DESC
 
 
+
+-- :::::::::to add:::::::::
 -- voucher data 
 -- joker data ? 
 -- city, zone, vertical from order_rank 
+-- refunds 
+-- number of contacts 
+-- :::::::::::::::::::::::
+
+/* 
+income 
+1. sub total order value * commision 
+2. service fee 
+3. delivery fee (in case of free delivery, vendor is paying) 
+
+loss 
+1. rider cost 
+2. vouchers
+3. (should we include refunds) ?
+
+*/ 
+
