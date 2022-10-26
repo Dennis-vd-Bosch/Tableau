@@ -3,15 +3,15 @@ WITH date_param AS (
     start_date_input
   , end_date_input
   FROM (
-    SELECT CAST('2022-09-23' AS DATE) AS start_date_input
-  , CAST("2022-10-23" AS DATE) AS end_date_input) 
+    SELECT CAST('2022-10-20' AS DATE) AS start_date_input
+  , CAST("2022-10-24" AS DATE) AS end_date_input) 
 ),
 order_base AS (
 SELECT
   c.order_code
 , o.vendor_name
 , s.delivery_type
-, c.estimated_commission_percentage
+, CASE WHEN c.estimated_commission_percentage IS NULL THEN 0 ELSE c.estimated_commission_percentage END AS est_comm_pcnt
 , delivery_fee_local
 , service_fee_total_local
 , subtotal_local
@@ -19,6 +19,11 @@ SELECT
 , CASE WHEN estimated_commission_percentage IS NULL OR subtotal_local IS NULL THEN 0 
        ELSE ((estimated_commission_percentage/100) * subtotal_local) 
        END AS commission_base_local
+, v.is_voucher_used
+, v.voucher.type
+, v.voucher.purpose
+-- , v.voucher.value_local AS voucher_value_local
+, voucher.foodpanda_subsidized_value_local AS voucher_value_paid_foodora
 
 FROM `fulfillment-dwh-production.pandata_report.se_order_commissions` AS c
 LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS o 
@@ -28,22 +33,28 @@ LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS o
 LEFT JOIN `fulfillment-dwh-production.curated_data_shared.orders_v2` s
        ON c.order_code = s.order_code
       AND c.global_entity_id = s.entity_id
+LEFT JOIN  `fulfillment-dwh-production.pandata_curated.pd_orders_agg_vouchers`  AS v
+       ON o.uuid = v.uuid
 
 WHERE c.global_entity_id = "OP_SE"
+  AND o.global_entity_id = "OP_SE"
+  AND s.entity_id = "OP_SE"
+  AND v.global_entity_id = "OP_SE"
+
   AND c.order_created_date_local BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND o.created_date_utc BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND s.created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
+  AND v.created_date_utc BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
+  
   AND o.is_gross_order IS TRUE 
   AND s.vendor.order_status = "completed"
+
 ),
 rider_base AS (
 SELECT 
   platform_order_code AS rider_order_code
 , STRING_AGG(DISTINCT vehicle_bag) AS bag_types
 , COUNT(rider_id) AS number_of_riders
-, CASE WHEN COUNT(rider_id) = 1 THEN "regular_delivery"  
-       WHEN COUNT(rider_id) > 1 THEN "multiple_delivery" 
-       END AS delivery_group
 , SUM(costs) * 1.43 AS total_rider_cpo
 FROM `fulfillment-dwh-production.curated_data_shared.utr_timings` 
 WHERE created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
@@ -51,52 +62,68 @@ WHERE created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT
 GROUP BY 1
 ),
 
-order_profitability AS (
+base_prep AS (
 SELECT
   order_base.*
 , rider_base.* EXCEPT(rider_order_code)
-, (commission_base_local + delivery_fee_local + service_fee_total_local) AS order_take_in_local
-, CASE WHEN total_rider_cpo IS NULL THEN 0 ELSE total_rider_cpo   /* + voucher_value_used */  END AS order_take_out_local
+
+, CASE WHEN number_of_riders = 0 OR number_of_riders IS NULL THEN "VD"  
+       WHEN number_of_riders = 1 THEN "regular_delivery"  
+       WHEN number_of_riders > 1 THEN "multiple_delivery"  
+       END AS delivery_group
+
 FROM order_base
 LEFT JOIN rider_base 
        ON order_base.order_code = rider_base.rider_order_code
-), 
-
-prep AS (
-SELECT 
-  order_profitability.* 
-, (order_take_in_local - order_take_out_local) AS net_profit_order
-, CASE WHEN (order_take_in_local - order_take_out_local) = 0 THEN "break-even"
-       WHEN (order_take_in_local - order_take_out_local) > 0 THEN "profit"
-       WHEN (order_take_in_local - order_take_out_local) < 0 THEN "loss"
-       END AS profit_group
-        
-
-FROM order_profitability
 )
+
+
+SELECT * FROM base_prep
+
+-- , (commission_base_local + delivery_fee_local + service_fee_total_local) AS order_take_in_local
+-- , CASE WHEN total_rider_cpo IS NULL THEN 0 ELSE total_rider_cpo   /* + voucher_value_used */  END AS order_take_out_local
+-- , CASE WHEN (order_take_in_local - order_take_out_local) = 0 THEN "break-even"
+--        WHEN (order_take_in_local - order_take_out_local) > 0 THEN "profit"
+--        WHEN (order_take_in_local - order_take_out_local) < 0 THEN "loss"
+--        END AS profit_group
+
+
+-- prep AS (
+-- SELECT 
+--   order_profitability.* 
+-- , (order_take_in_local - order_take_out_local) AS net_profit_order
+
+
+-- FROM order_profitability
+-- )
 
 
 
 -- SELECT * FROM prep 
 
 
+-- SELECT 
+-- COUNT(agg_values_granted)
+-- FROM prep
 
-SELECT 
-  vendor_name
-, profit_group	
-, delivery_type
-, delivery_group
-, COUNT(DISTINCT order_code) AS number_of_orders
-, SUM(net_profit_order) AS profit_loss
-FROM prep
-GROUP BY 1,2,3,4
-ORDER BY 1,2,3,4 DESC
+
+-- SELECT 
+
+--   profit_group	
+-- , delivery_type
+-- , delivery_group
+-- , COUNT(DISTINCT order_code) AS number_of_orders
+-- , SUM(net_profit_order) AS profit_loss
+-- FROM prep
+-- GROUP BY 1,2,3
+-- ORDER BY 1,2,3,4 DESC
 
 
 
 -- :::::::::to add:::::::::
--- voucher data 
+
 -- joker data ? 
+-- gift data
 -- city, zone, vertical from order_rank 
 -- refunds 
 -- number of contacts 
