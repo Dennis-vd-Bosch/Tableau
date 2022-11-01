@@ -3,8 +3,8 @@ WITH date_param AS (
     start_date_input
   , end_date_input
   FROM (
-    SELECT CAST('2022-09-24' AS DATE) AS start_date_input
-  , CAST("2022-10-24" AS DATE) AS end_date_input) 
+    SELECT CAST('2022-10-01' AS DATE) AS start_date_input
+  , CAST("2022-10-02" AS DATE) AS end_date_input) 
 ),
 order_base AS (
 SELECT
@@ -42,20 +42,13 @@ LEFT JOIN `foodora-bi-se.bl_bi.order_rank` AS r
        ON c.order_code = r.order_code
 
 WHERE c.global_entity_id = "OP_SE"
-  AND o.global_entity_id = "OP_SE"
-  AND s.entity_id = "OP_SE"
-  AND v.global_entity_id = "OP_SE"
-  AND r.global_entity_id = "OP_SE"
-
   AND c.order_created_date_local BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND o.created_date_utc BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND s.created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND v.created_date_utc BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param) 
   AND r.created_date_utc BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
-  
   AND o.is_gross_order IS TRUE 
   AND s.vendor.order_status = "completed"
-
 ),
 rider_base AS (
 SELECT 
@@ -67,11 +60,23 @@ FROM `fulfillment-dwh-production.curated_data_shared.utr_timings`
 WHERE created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND country_code = "se"
 GROUP BY 1
+
+),
+contacts AS (
+  SELECT 
+  order_id
+, contact_reason_l3
+, ROW_NUMBER() OVER (PARTITION BY c.global_entity_id, c.order_id ORDER BY c.creation_timestamp DESC) AS rank_contact
+FROM `fulfillment-dwh-production.curated_data_shared_gcc_service.all_contacts` c
+WHERE global_entity_id = 'OP_SE'
+  AND created_date_localtime BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param) + 30
+  AND order_id IS NOT NULL 
 ),
 base_prep AS (
 SELECT
   order_base.*
 , rider_base.* EXCEPT(rider_order_code, rider_cpo)
+, cc.* EXCEPT(order_id, rank_contact)
 , CASE WHEN rider_cpo IS NULL THEN 0 ELSE rider_cpo END AS total_rider_cpo
 , CASE WHEN delivery_type = "PICKUP" THEN "PICKUP"
        WHEN number_of_riders = 0 OR number_of_riders IS NULL THEN "VD"  
@@ -81,6 +86,9 @@ SELECT
 FROM order_base
 LEFT JOIN rider_base
        ON order_base.order_code = rider_base.rider_order_code
+LEFT JOIN (SELECT * FROM contacts WHERE rank_contact = 1) AS cc
+       ON order_base.order_code = cc.order_id 
+
 ),
 profit_prep AS (
 SELECT 
@@ -118,27 +126,27 @@ SELECT
 )
 
 
--- SELECT * FROM end_result
+SELECT * FROM end_result 
 
 
 
-SELECT 
-  profit_group	
-, delivery_type
-, delivery_group
-, COUNT(DISTINCT order_code) AS number_of_orders
-, SUM(net_order_result) AS profit_loss
-FROM end_result
-GROUP BY 1,2,3
-ORDER BY 1,2,3,4 DESC
+-- SELECT 
+--   profit_group	
+-- , delivery_type
+-- , delivery_group
+-- , COUNT(DISTINCT order_code) AS number_of_orders
+-- , SUM(net_order_result) AS profit_loss
+-- FROM end_result
+-- GROUP BY 1,2,3
+-- ORDER BY 1,2,3,4 DESC
 
 
 
 -- :::::::::to add:::::::::
 -- joker data ? 
 -- gift data
--- refunds 
--- number of contacts 
+-- refunds >>>> not needed since baskets are updated and item is removed 
+-- number of contacts >>>>>> done 
 -- :::::::::::::::::::::::
 
 /* 
@@ -152,4 +160,3 @@ loss
 2. vouchers
 3. (should we include refunds) ?
 */ 
-
