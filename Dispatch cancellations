@@ -1,0 +1,148 @@
+WITH dates AS (
+SELECT DISTINCT 
+  d.report_week
+, d.iso_date
+FROM `foodora-bi-se.bl_bi.dim_date` AS d
+where d.iso_date BETWEEN DATE_SUB(CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1), INTERVAL 8 WEEK)+1
+AND  CURRENT_DATE-(EXTRACT(DAYOFWEEK FROM CURRENT_DATE)-1)
+),
+specific_notes AS (
+  SELECT 
+  rest_closed
+, rider_tech_equip_issue
+, taken_by_another_rider 
+, not_willing_to_cook
+, food_spilled
+, customer_problem_canc
+, device_issue
+, double_cooking
+, no_update
+, prod_unavail
+, outside_zone
+, plus_18_items
+, cancel_by_market
+, rider_didnt_return 
+, rest_too_busy
+, cancelled_by_disp
+, no_rider
+, rider_accident
+, outside_service_hours
+  FROM
+    ( SELECT 
+      CAST('rest_closed' AS STRING) AS rest_closed
+    , CAST('rider_tech_equip_issue' AS STRING) AS rider_tech_equip_issue 
+    , CAST('taken_by_another_rider' AS STRING) AS taken_by_another_rider
+    , CAST('not_willing_to_cook' AS STRING) AS not_willing_to_cook
+    , CAST('food_spilled' AS STRING) AS food_spilled 
+    , CAST('customer_problem_canc' AS STRING) AS customer_problem_canc 
+    , CAST('device_issue' AS STRING) AS device_issue
+    , CAST('double_cooking' AS STRING) AS double_cooking 
+    , CAST('no_update' AS STRING) AS no_update 
+    , CAST('prod_unavail' AS STRING) AS prod_unavail
+    , CAST('outside_zone' AS STRING) AS outside_zone
+    , CAST('plus_18_items' AS STRING) AS plus_18_items
+    , CAST('cancel_by_market' AS STRING) AS cancel_by_market
+    , CAST('rider_didnt_return' AS STRING) AS rider_didnt_return
+    , CAST('rest_too_busy' AS STRING) AS rest_too_busy
+    , CAST('cancelled_by_disp' AS STRING) AS cancelled_by_disp
+    , CAST('no_rider' AS STRING) AS no_rider
+    , CAST('rider_accident' AS STRING) AS rider_accident
+    , CAST('outside_service_hours' AS STRING) AS outside_service_hours)
+),
+order_v2 AS (
+  SELECT 
+    order_code
+  , created_date
+  , FORMAT_DATETIME('%b', created_date) AS month_name
+  , EXTRACT(MONTH FROM created_date) AS month_number
+  , EXTRACT(WEEK FROM created_date) AS week_number
+  , FORMAT_DATE('%a', created_date) AS day_name
+  , rider.cancellation.reason AS original_canc_reason
+  FROM `fulfillment-dwh-production.curated_data_shared.orders_v2`
+  WHERE created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
+    AND entity.id = 'OP_SE'
+    AND rider.order_status = 'cancelled'
+    -- AND rider.cancellation.source = 'dispatcher'
+),
+dispatch AS (
+  SELECT 
+    hurrier.order_code AS hurrier_code
+  , hurrier.update_order_dispatchers_notes.note AS dispatch_note
+  , email AS agent_email 
+  , ROW_NUMBER() OVER (PARTITION BY country_code, hurrier.order_code ORDER BY  created_at DESC) AS rank_note                 
+  FROM `fulfillment-dwh-production.curated_data_shared.audit_logs`
+  WHERE country_code = "se"
+    AND created_date BETWEEN (SELECT MIN(iso_date) FROM dates) AND (SELECT MAX(iso_date) FROM dates)
+    AND hurrier.update_order_dispatchers_notes.note IS NOT NULL
+),
+prep AS (
+SELECT
+  dates.* 
+, order_v2.*
+, dispatch.* EXCEPT(hurrier_code, rank_note)
+, CASE 
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'stäng|close|closin') 
+       THEN (SELECT rest_closed FROM specific_notes) 
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'car|däck|tire|bilen|budets bil|couriers vehicle|couriers equip|cykl|moped|quipmen|gps|quip issu') 
+       THEN (SELECT rider_tech_equip_issue FROM specific_notes) 
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'aken by other ride|aken by another ride|taken by|aken by wrong ride|rong r|agen av anna|fel bud|annat bud|nother rid|aken by wr|aken by anoth|agen av en an|agen anna|aken by anoth') 
+       THEN (SELECT taken_by_another_rider FROM specific_notes)  
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'ot willing to|efuse to')  
+       THEN (SELECT not_willing_to_cook FROM specific_notes) 
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'spill')  
+       THEN (SELECT food_spilled FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'customer cancel')  
+       THEN (SELECT customer_problem_canc FROM specific_notes)     -- kund|customer|
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'device|internet|system') 
+       THEN (SELECT device_issue FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'double|dubbel|dubble')  
+       THEN (SELECT double_cooking FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'uppdatering|no update|updatering|updateringsvar')  
+       THEN (SELECT no_update FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'roduct unavailabl|roduct is un|rodukt är sl|rodukt sl|esto does not h|esto har int|esto har sl|aknar sa|aknar en|endor does not hav')  
+       THEN (SELECT prod_unavail FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'utside deliver|utside of zon|utside zon') 
+       THEN (SELECT outside_zone FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'18+')  
+       THEN (SELECT plus_18_items FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'market')  
+       THEN (SELECT cancel_by_market FROM specific_notes)    
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'tillbaka')  
+       THEN (SELECT rider_didnt_return FROM specific_notes)   
+  WHEN REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'esto för upptag')  
+       THEN (SELECT rest_too_busy FROM specific_notes)   
+  WHEN LOWER(dispatch.dispatch_note) = "avbryter"
+          OR LOWER(dispatch.dispatch_note) = "k vill avbryta"
+          OR LOWER(dispatch.dispatch_note) = "avbruten"  
+          OR LOWER(dispatch.dispatch_note) = "avbryter"
+          OR LOWER(dispatch.dispatch_note) = "avbryts"    
+          OR REGEXP_CONTAINS(LOWER(dispatch.dispatch_note), r'sked to cance|ancellin|ancel it|cancel order|equest to cance') 
+          THEN (SELECT cancelled_by_disp FROM specific_notes)   
+  WHEN LOWER(dispatch.dispatch_note) = "no rider"  
+       THEN (SELECT no_rider FROM specific_notes)    
+  WHEN LOWER(dispatch.dispatch_note) = "rider accident"  
+       THEN (SELECT rider_accident FROM specific_notes)    
+  WHEN LOWER(dispatch.dispatch_note) = "outside of service hours"  
+       THEN (SELECT outside_service_hours FROM specific_notes)       
+  
+  ELSE original_canc_reason
+  END AS specific_note
+
+, CASE WHEN dispatch.dispatch_note IS NULL THEN FALSE ELSE TRUE END AS has_note_dispatch
+
+
+FROM order_v2
+LEFT JOIN dispatch
+       ON order_v2.order_code = dispatch.hurrier_code 
+LEFT JOIN dates 
+       ON order_v2.created_date = dates.iso_date 
+WHERE rank_note = 1 OR rank_note IS NULL 
+)
+
+SELECT
+  prep.*
+FROM prep
+-- WHERE has_note_dispatch IS TRUE 
+WHERE agent_email IS NOT NULL
+ORDER BY report_week DESC
+
