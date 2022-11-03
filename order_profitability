@@ -1,11 +1,17 @@
+-----------------------
+--ORDER PROFITABILITY--
+-----------------------
 WITH date_param AS (
   SELECT 
     start_date_input
   , end_date_input
-  FROM (
-    SELECT CAST('2022-10-01' AS DATE) AS start_date_input
-  , CAST("2022-10-02" AS DATE) AS end_date_input) 
+  FROM (SELECT 
+    CAST('2022-10-01' AS DATE) AS start_date_input
+  , CAST("2022-10-31" AS DATE) AS end_date_input) 
 ),
+--------------
+--ORDER BASE--
+--------------
 order_base AS (
 SELECT
   c.order_code
@@ -20,7 +26,7 @@ SELECT
 , subtotal_local
 , total_value_local
 , CASE WHEN estimated_commission_percentage IS NULL OR subtotal_local IS NULL THEN 0 
-       ELSE ((estimated_commission_percentage/100) * subtotal_local) 
+       ELSE ((estimated_commission_percentage / 100) * subtotal_local) 
        END AS commission_base_local
 , v.is_voucher_used
 , v.voucher.type
@@ -50,6 +56,9 @@ WHERE c.global_entity_id = "OP_SE"
   AND o.is_gross_order IS TRUE 
   AND s.vendor.order_status = "completed"
 ),
+--------------
+--RIDER BASE--
+--------------
 rider_base AS (
 SELECT 
   platform_order_code AS rider_order_code
@@ -59,9 +68,11 @@ SELECT
 FROM `fulfillment-dwh-production.curated_data_shared.utr_timings` 
 WHERE created_date BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param)    
   AND country_code = "se"
-GROUP BY 1
-
+GROUP BY rider_order_code
 ),
+----------------
+--CONTACT BASE--
+----------------
 contacts AS (
   SELECT 
   order_id
@@ -72,11 +83,15 @@ WHERE global_entity_id = 'OP_SE'
   AND created_date_localtime BETWEEN (SELECT start_date_input FROM date_param) AND (SELECT end_date_input FROM date_param) + 30
   AND order_id IS NOT NULL 
 ),
+------------------
+--STACKED ORDERS--
+------------------
 base_prep AS (
 SELECT
   order_base.*
 , rider_base.* EXCEPT(rider_order_code, rider_cpo)
 , cc.* EXCEPT(order_id, rank_contact)
+
 , CASE WHEN rider_cpo IS NULL THEN 0 ELSE rider_cpo END AS total_rider_cpo
 , CASE WHEN delivery_type = "PICKUP" THEN "PICKUP"
        WHEN number_of_riders = 0 OR number_of_riders IS NULL THEN "VD"  
@@ -88,31 +103,37 @@ LEFT JOIN rider_base
        ON order_base.order_code = rider_base.rider_order_code
 LEFT JOIN (SELECT * FROM contacts WHERE rank_contact = 1) AS cc
        ON order_base.order_code = cc.order_id 
-
 ),
+--------------
+--FINANCIALS--
+--------------
 profit_prep AS (
 SELECT 
   base_prep.* 
--- money in -- 
-, CASE WHEN delivery_type != "VENDOR_DELIVERY" THEN
-  (commission_base_local 
+
+--REVENUE-- 
+, CASE WHEN delivery_type != "VENDOR_DELIVERY" THEN (/*for OD and PICKUP*/ 
+    commission_base_local 
   + delivery_fee_local 
   + service_fee_total_local)
-  ELSE (commission_base_local  
+  ELSE (/*for VD*/ 
+    commission_base_local  
   + service_fee_total_local)
   END AS value_taken_in_local
--- money out -- 
-, CASE WHEN delivery_type != "VENDOR_DELIVERY" THEN
-  (total_rider_cpo
+
+--LOSS--
+, CASE WHEN delivery_type != "VENDOR_DELIVERY" THEN (/*for OD and PICKUP*/ 
+    total_rider_cpo
   + voucher_value_paid_foodora)
-  ELSE voucher_value_paid_foodora
+  ELSE voucher_value_paid_foodora /*for VD*/ 
   END AS value_taken_out_local
 
 FROM base_prep
-
-
 ),
 
+---------------
+--PROFIT/LOSS--
+---------------
 end_result AS (
 SELECT 
   profit_prep.*
@@ -121,42 +142,37 @@ SELECT
        WHEN ( value_taken_in_local - value_taken_out_local ) > 0 THEN "profit"
        WHEN ( value_taken_in_local - value_taken_out_local ) < 0 THEN "loss"
        END AS profit_group
-
  FROM profit_prep
 )
 
 
-SELECT * FROM end_result 
+
+SELECT 
+  profit_group	
+, delivery_type
+, delivery_group
+, COUNT(DISTINCT order_code) AS number_of_orders
+, SUM(net_order_result) AS profit_loss
+FROM end_result
+GROUP BY 1,2,3
+ORDER BY 1,2,3,4 DESC
+
+-- SELECT * FROM end_result 
 
 
-
--- SELECT 
---   profit_group	
--- , delivery_type
--- , delivery_group
--- , COUNT(DISTINCT order_code) AS number_of_orders
--- , SUM(net_order_result) AS profit_loss
--- FROM end_result
--- GROUP BY 1,2,3
--- ORDER BY 1,2,3,4 DESC
-
-
-
--- :::::::::to add:::::::::
--- joker data ? 
--- gift data
--- refunds >>>> not needed since baskets are updated and item is removed 
--- number of contacts >>>>>> done 
--- :::::::::::::::::::::::
 
 /* 
 income 
 1. sub total order value * commision 
 2. service fee 
-3. delivery fee (in case of free delivery, vendor is paying) 
+3. delivery fee for OD >>>>>> in case of free delivery, vendor is paying) 
 
 loss 
-1. rider cost 
-2. vouchers
-3. (should we include refunds) ?
+1. rider cost >>>>>> salary, always * 1.43 for tax purposes
+2. vouchers >>>>>> only how much foodora is paying 
+3. contact cost >>>>>> added in the query, not in the cost yet >> contact cost is somewhere between 22 and 38 sek per contact made
+4. joker data >>>>>> not added yet
+5. gift data  >>>>>> not added yet 
+
+-- refunds >>>> not needed since baskets are updated and item is removed 
 */ 
