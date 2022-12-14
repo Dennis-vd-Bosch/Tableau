@@ -6,8 +6,8 @@ WITH date_param AS (
     start_date_input
   , end_date_input
   FROM (SELECT 
-    CAST('2022-10-01' AS DATE) AS start_date_input
-  , CAST("2022-10-31" AS DATE) AS end_date_input) 
+    CAST('2022-01-01' AS DATE) AS start_date_input
+  , CAST("2022-11-30" AS DATE) AS end_date_input) 
 ),
 --------------
 --ORDER BASE--
@@ -42,7 +42,7 @@ LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS o
 LEFT JOIN `fulfillment-dwh-production.curated_data_shared.orders_v2` s
        ON c.order_code = s.order_code
       AND c.global_entity_id = s.entity_id
-LEFT JOIN  `fulfillment-dwh-production.pandata_curated.pd_orders_agg_vouchers`  AS v
+LEFT JOIN `fulfillment-dwh-production.pandata_report.regional_eu__pd_orders_agg_vouchers`  AS v
        ON o.uuid = v.uuid
 LEFT JOIN `foodora-bi-se.bl_bi.order_rank` AS r 
        ON c.order_code = r.order_code
